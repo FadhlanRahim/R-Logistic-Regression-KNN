@@ -1,0 +1,246 @@
+---
+title: "Heart Disease"
+output: html_document
+---
+
+# Objective
+
+In this notebook i will create a prediction model to determine wether or not a patient (or you) have an unhealthy or healthy heart condition using Logistic Regression model and KNN Model.
+
+# Setup and Data Import
+```{r message=FALSE}
+options(scipen = 999)
+library(dplyr)
+library(gtools)
+library(ggplot2)
+library(class)
+library(tidyr)
+library(rsample)
+library(MASS)
+library(caret)
+```
+
+## Input Data and Inspection
+```{r}
+heart = read.csv('heart.csv')
+head(heart)
+```
+
+## Data Dictionary
+1. age
+2. sex : 1 = male, 0 = female
+3. chest pain type (4 values)
+4. resting blood pressure
+5. serum cholestoral in mg/dl
+6. fasting blood sugar > 120 mg/dl : 1 = yes, 0 = no
+7. resting electrocardiographic results (values 0,1,2)
+8. maximum heart rate achieved
+9. exercise induced angina : 1 = yes, 0 = no
+10. oldpeak = ST depression induced by exercise relative to rest
+11. the slope of the peak exercise ST segment
+12. number of major vessels (0-3) colored by flourosopy
+13. thal: 3 = normal; 6 = fixed defect; 7 = reversable defect
+14. target : 1 Not Healthy, 0 = Healthy
+
+```{r}
+summary(heart)
+```
+
+#EDA & Data Wrangling
+
+## Target Proportion
+```{r}
+prop.table(table(heart$target))
+```
+
+## Assigning right data type
+```{r}
+heart <- heart %>% 
+  mutate_if(is.integer, as.factor) %>% 
+  mutate(sex = factor(sex, levels = c(0,1), labels = c("Female", "Male")),
+         fbs =factor(fbs, levels = c(0,1), labels = c("No", "Yes")),
+         exang = factor(exang, levels = c(0,1), labels = c("No", "Yes")),
+         target = factor(target, levels = c(0,1), labels = c("Healthy", "Not Healthy")),
+         ï..age = as.integer(ï..age),
+         trestbps = as.integer(trestbps),
+         chol = as.integer(chol),
+         thalach = as.integer(thalach))
+```
+
+
+
+# Train Test Data Split
+```{r}
+set.seed(420)
+
+index <- initial_split(heart, 0.7, strata = 'target')
+heart.train <- training(index)
+heart.test <- testing(index)
+```
+
+## Check Target Proportion on both set
+```{r}
+prop.table(table(heart.train$target))
+prop.table(table(heart.test$target))
+```
+
+# Creating Prediction Model
+
+## Logistic Regression
+
+The easiest way to determine which variable to used as a predictor without the knowledge of the business is to create a model using all available variable, and then eliminate the variables one by one using stepwise function.
+
+```{r}
+init_all <- glm(target~., 'binomial', heart.train)
+```
+
+### Feature Selection
+
+Backward Stepwise Method
+```{r}
+backstep_model <- step(init_all, direction = 'backward', trace = 0)
+summary(backstep_model)
+```
+
+Apparently, thal variable indicating a perfect separation (can be identified with unusualy high value of log of odds), so we have to remove it.
+
+```{r}
+model_heart <- glm(target ~ sex + cp + trestbps + exang + oldpeak + ca + slope, 'binomial', heart.train)
+summary(model_heart)
+```
+### Prediction and Model Evaluation
+
+```{r}
+#Model Prediction
+heart_pred <- predict(model_heart, heart.test, 'response')
+```
+
+To prioritize our recall, we can reduce the threshold
+
+```{r}
+heart_pred_class <- as.factor(ifelse(heart_pred > 0.4, 'Not Healthy', 'Healthy'))
+```
+
+Evaluation
+
+```{r}
+confusionMatrix(heart_pred_class, heart.test$target, positive = "Not Healthy")
+```
+
+Because we do not want to miss diagnose an unhealthy person as healthy, i have reduced the treshold to 0.4. it could be lower but that will resulting in more false positive (diagnosing healthy person as unhealthy).
+
+### Logistic Model Interpretation
+
+```{r}
+exp(model_heart$coefficients)
+```
+
+1. A male individuals has a 12,4% less chance of having unhealthy heart compared to female individuals, same goes for other categoric variable compared to their own base/default value (ex; cp1/cp2/cp3 compared to cp0), with their own respective odds values
+2. an increase of 1 value of 'trestbps' (blood preasure), resulting 0.96 less odds of having unhealthy heart, same goes for other numeric variables with their own respective odds values
+
+## K Nearest Neighbour
+
+KNN Model does not work well with categorical variable, and unfortunately most of our variable are categorical, to make our data work properly with KNN model, we have to transform our categorical into multiple individual variable.
+
+```{r}
+heart2 <- dummyVars(" ~target+sex+cp+fbs+exang+oldpeak+slope+ca+thal", data = heart)
+heart2 <- data.frame(predict(heart2, newdata = heart))
+str(heart2)
+```
+
+Remove every negative value variables, and transform target to factor
+
+```{r}
+heart2$sex.Female <- NULL
+heart2$fbs.False <- NULL
+heart2$exang.No <- NULL
+heart2$target.Healthy <- NULL
+heart2$target.Not.Healthy <- as.factor(heart2$target.Not.Healthy)
+```
+
+Train Test Split
+```{r}
+set.seed(420)
+
+index <- initial_split(heart2, 0.7)
+heart2.train <- training(index)
+heart2.test <- testing(index)
+```
+
+Seperating Predictor and Target
+```{r}
+# prediktor data train
+train_x <- heart2.train %>% 
+           select_if(is.numeric)
+
+# target data train
+train_y <- heart2.train %>% 
+           dplyr::select(target.Not.Healthy)
+
+# prediktor data test
+test_x <- heart2.test %>% 
+          select_if(is.numeric)
+
+# target data test
+test_y <- heart2.test %>% 
+          dplyr::select(target.Not.Healthy)
+```
+
+### Normalizing
+
+Our data need to be normalized so every variables have same ranges.
+
+```{r}
+train_x <- scale(train_x) 
+  
+test_x <- scale(test_x,
+                center = attr(train_x, "scaled:center"),
+                scale =  attr(train_x,"scaled:scale"))
+```
+
+### KNN Modeling
+```{r}
+library(class)
+heartknn <- knn(train = train_x, test = test_x, cl = train_y$target, k = 18)
+```
+
+### KNN Evaluation
+```{r}
+confusionMatrix(data = heartknn ,reference = heart2.test$target.Not.Healthy, positive = "1")
+```
+
+# Model Comparison
+```{r}
+confusionMatrix(heart_pred_class, heart.test$target, positive = "Not Healthy")
+confusionMatrix(data = heartknn ,reference = heart2.test$target.Not.Healthy, positive = "1")
+```
+
+# Conclusion
+
+Idealy, we want our accuracy (overall prediction on both classes) as our indicator on how good our model is, Realisticaly, we want to prioritize one of the class, here i decided to prioritize Recall (Minimizing False Negative), if i have to put myself as a medical practioner, I dont want patient who are actually Not Healthy diagnosed as healthy, could end up in a lawsuit, thats $ loss. 
+
+Our KNN model are slightly better on all metrics compared to Logistic Regression model, if the goal is only to predict the result, use KNN model because it has better metrics and performance, but it cannot be interpreted, we cannot figure on which variable effecting our target the most and the least. If data understanding is the goal, then use Logistic Regression Model, every variable can be intepreted as Probability and Odds toward our target.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
