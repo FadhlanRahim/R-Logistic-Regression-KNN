@@ -1,6 +1,8 @@
 ---
 title: "Heart Disease"
-output: html_document
+output:
+  pdf_document: default
+  html_document: default
 ---
 
 # Objective
@@ -199,10 +201,11 @@ test_x <- scale(test_x,
 ```
 
 ### KNN Modeling
-```{r}
-library(class)
+```{r message=FALSE, warning=FALSE}
 heartknn <- knn(train = train_x, test = test_x, cl = train_y$target, k = 18)
 ```
+k values are root of number of observation
+
 
 ### KNN Evaluation
 ```{r}
